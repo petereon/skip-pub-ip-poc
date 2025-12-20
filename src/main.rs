@@ -108,6 +108,27 @@ async fn main() -> Result<()> {
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
 
+    // Add IPFS bootstrap nodes to join the global DHT
+    info!("🌐 Adding bootstrap nodes...");
+    let bootstrap_nodes = vec![
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+        "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+    ];
+
+    for addr in bootstrap_nodes {
+        if let Ok(multiaddr) = addr.parse::<libp2p::Multiaddr>() {
+            if let Some(libp2p::multiaddr::Protocol::P2p(peer_id)) =
+                multiaddr.iter().find(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+            {
+                let peer_id = PeerId::from_multihash(peer_id.into()).expect("valid peer id");
+                swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr);
+                info!("Added bootstrap peer: {}", peer_id);
+            }
+        }
+    }
+
     // Bootstrap to DHT
     info!("🌐 Bootstrapping to DHT...");
     if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
@@ -122,13 +143,23 @@ async fn main() -> Result<()> {
     // Handle mode-specific setup
     let service_key = service_key(&args.service);
     let mut registered = false;
-    let mut _discovered_peer: Option<PeerId> = None;
+    let mut discovered_peer: Option<PeerId> = None;
+    let mut bootstrapped = false;
 
-    if args.mode == "server" {
-        info!("🔧 Server mode - will register in DHT");
-    } else {
-        info!("🔍 Client mode - will lookup service in DHT");
-        swarm.behaviour_mut().kad.get_providers(service_key.clone());
+    // For client: periodically retry get_providers until we find a server.
+    let (lookup_tx, mut lookup_rx) = mpsc::channel::<()>(1);
+    if args.mode == "client" {
+        let lookup_tx_clone = lookup_tx.clone();
+        tokio::spawn(async move {
+            // initial delay to give server time to come up and announce
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                if lookup_tx_clone.send(()).await.is_err() {
+                    break;
+                }
+            }
+        });
     }
 
     // Channel for stdin commands
@@ -158,18 +189,6 @@ async fn main() -> Result<()> {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!("🎧 Listening on {}", address);
-
-                        // Register in DHT if server and not yet registered
-                        if args.mode == "server" && !registered {
-                            let record = kad::Record::new(service_key.clone(), local_peer_id.to_bytes());
-                            if let Err(e) = swarm.behaviour_mut().kad.put_record(record, kad::Quorum::One) {
-                                error!("Failed to register: {}", e);
-                            } else {
-                                swarm.behaviour_mut().kad.start_providing(service_key.clone()).ok();
-                                info!("✅ Registered service '{}' in DHT", args.service);
-                                registered = true;
-                            }
-                        }
                     }
 
                     SwarmEvent::Behaviour(P2PBehaviourEvent::Identify(
@@ -184,19 +203,37 @@ async fn main() -> Result<()> {
                     SwarmEvent::Behaviour(P2PBehaviourEvent::Kad(
                         kad::Event::OutboundQueryProgressed { result, .. },
                     )) => match result {
-                        kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
-                            providers, ..
-                        })) => {
-                            if let Some(peer_id) = providers.iter().next() {
-                                info!("✅ Found service provider: {}", peer_id);
-                                _discovered_peer = Some(*peer_id);
-                                if let Err(e) = swarm.dial(*peer_id) {
-                                    error!("Failed to dial: {}", e);
+                        kad::QueryResult::Bootstrap(Ok(_)) => {
+                            info!("✅ Bootstrap successful");
+                            bootstrapped = true;
+                            // Once bootstrapped, server can safely announce.
+                            if args.mode == "server" && !registered {
+                                info!("📣 Registering service '{}' in DHT", args.service);
+                                if let Err(e) = swarm.behaviour_mut().kad.start_providing(service_key.clone()) {
+                                    error!("Failed to start providing: {}", e);
+                                } else {
+                                    registered = true;
+                                    info!("✅ Service '{}' is now being provided", args.service);
                                 }
                             }
                         }
-                        kad::QueryResult::Bootstrap(Ok(_)) => {
-                            info!("✅ Bootstrap successful");
+                        kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
+                            providers, ..
+                        })) => {
+                            if !providers.is_empty() {
+                                let peer_id = *providers.iter().next().unwrap();
+                                info!("✅ Found service provider: {}", peer_id);
+                                discovered_peer = Some(peer_id);
+                                if let Err(e) = swarm.dial(peer_id) {
+                                    error!("Failed to dial: {}", e);
+                                }
+                            } else {
+                                warn!("No providers returned in FoundProviders");
+                            }
+                        }
+                        kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. })) => {
+                            // This is the "no providers yet" case seen in the file-sharing example [web:21].
+                            warn!("No providers found yet for service key, will retry...");
                         }
                         _ => {}
                     },
@@ -207,6 +244,12 @@ async fn main() -> Result<()> {
 
                     _ => {}
                 }
+            }
+
+            // periodic provider lookup in client mode
+            Some(_) = lookup_rx.recv(), if args.mode == "client" && discovered_peer.is_none() && bootstrapped => {
+                info!("🔍 Looking up service providers for '{}'", args.service);
+                swarm.behaviour_mut().kad.get_providers(service_key.clone());
             }
 
             Some(cmd) = stdin_rx.recv() => {
