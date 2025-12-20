@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package p2p;
+
+// Generic message that can be sent between client and server
+message Message {
+  string id = 1;           // Unique message ID
+  string type = 2;         // Message type (e.g., "request", "response", "notification")
+  bytes payload = 3;       // Arbitrary payload data
+  int64 timestamp = 4;     // Unix timestamp
+  map<string, string> metadata = 5; // Optional metadata
+}
