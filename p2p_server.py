@@ -3,8 +3,8 @@ Simple P2P Server - Uses Rust node for P2P, handles messages via stdin/stdout
 """
 
 import asyncio
+import json
 import sys
-from python.message_pb2 import Message
 
 
 class P2PServer:
@@ -56,12 +56,12 @@ class P2PServer:
         while True:
             await asyncio.sleep(1)
 
-    async def send_message(self, peer_id: str, message: Message):
-        """Send a message to a peer"""
-        cmd = f"send {peer_id} {message.to_json().decode()}\n"
+    async def send_message(self, peer_id: str, message: dict):
+        """Send a JSON message to a peer"""
+        cmd = f"send {peer_id} {json.dumps(message)}\n"
         self.rust_process.stdin.write(cmd.encode())
         await self.rust_process.stdin.drain()
-        print(f"📤 Sent to {peer_id}: {message.type}")
+        print(f"📤 Sent to {peer_id}: {message.get('type', 'unknown')}")
 
     async def listen(self):
         """Listen for incoming messages"""

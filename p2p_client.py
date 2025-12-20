@@ -3,8 +3,8 @@ Simple P2P Client - Uses Rust node for P2P, sends/receives messages via stdin/st
 """
 
 import asyncio
+import json
 import sys
-from python.message_pb2 import Message
 
 
 class P2PClient:
@@ -60,8 +60,8 @@ class P2PClient:
                     self.server_peer_id = parts[1].strip()
                     print(f"\n✅ Server found: {self.server_peer_id}\n")
 
-    async def send_message(self, message: Message):
-        """Send a message to the server"""
+    async def send_message(self, message: dict):
+        """Send a JSON message to the server"""
         if not self.server_peer_id:
             print("❌ Server not found yet, waiting...")
             await asyncio.sleep(2)
@@ -69,10 +69,12 @@ class P2PClient:
                 print("❌ Server not available")
                 return
 
-        cmd = f"send {self.server_peer_id} {message.to_json().decode()}\n"
+        cmd = f"send {self.server_peer_id} {json.dumps(message)}\n"
         self.rust_process.stdin.write(cmd.encode())
         await self.rust_process.stdin.drain()
-        print(f"📤 Sent: {message.type} - {message.payload.decode()}")
+        print(
+            f"📤 Sent: {message.get('type', 'unknown')} - {message.get('payload', '')}"
+        )
 
     async def listen(self):
         """Listen for incoming messages from server"""
@@ -100,12 +102,13 @@ async def interactive_mode(client: P2PClient):
                 print("👋 Goodbye!")
                 break
 
-            # Create and send message
-            msg = Message.create(
-                msg_type="request",
-                payload=user_input,
-                metadata={"from": "python_client"},
-            )
+            # Create and send JSON message
+            msg = {
+                "type": "request",
+                "payload": user_input,
+                "metadata": {"from": "python_client"},
+                "timestamp": asyncio.get_event_loop().time(),
+            }
 
             await client.send_message(msg)
 

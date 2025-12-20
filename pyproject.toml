@@ -4,8 +4,4 @@ version = "0.1.0"
 description = "P2P NAT traversal proof of concept"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "grpcio-tools>=1.76.0",
-    "protobuf>=5.28.0",
-    "websockets>=13.1",
-]
+dependencies = []
