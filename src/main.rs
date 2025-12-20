@@ -1,5 +1,5 @@
 // P2P Node: Simple send/listen API for bidirectional byte-stream messaging
-// Transport-agnostic: handles raw bytes, Python handles protobuf encoding/decoding
+// Transport-agnostic: handles raw bytes, Python handles JSON encoding/decoding
 
 use anyhow::Result;
 use clap::Parser;

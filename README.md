@@ -1,30 +1,33 @@
-# Quick Start Guide - Protobuf Version
+# P2P NAT Traversal - Proof of Concept
 
-## New Simplified Architecture
+## Architecture
 
 ```
 Client Network (NAT)              Server Network (NAT)
 ┌─────────────────┐              ┌─────────────────┐
 │ p2p_client.py   │              │ p2p_server.py   │
-│ (send/listen)   │              │ (send/listen)   │
+│ (JSON encode)   │              │ (JSON encode)   │
 └────────┬────────┘              └────────┬────────┘
          │ stdin/stdout                   │ stdin/stdout
          │                                │
 ┌────────▼────────┐              ┌────────▼────────┐
 │  p2p-node       │              │  p2p-node       │
 │  (Rust)         │◄────P2P─────►│  (Rust)         │
-│  --mode client  │  Protobuf    │  --mode server  │
-│  send()         │  Messages    │  send()         │
-│  listen()       │  over        │  listen()       │
-└─────────────────┘  libp2p      └─────────────────┘
+│  --mode client  │   Raw Bytes  │  --mode server  │
+│  send(bytes)    │   over       │  send(bytes)    │
+│  listen()       │   libp2p     │  listen()       │
+└─────────────────┘              └─────────────────┘
 ```
+
+**Key Design**: Rust is transport-agnostic, handling only raw bytes. Python handles all serialization (JSON for PoC).
 
 ## Setup
 
 ```bash
-# Install dependencies
+# Build Rust P2P node
 cargo build --bin p2p-node
-pip install -e .
+
+# No Python dependencies needed!
 ```
 
 ## Running
@@ -35,7 +38,7 @@ pip install -e .
 python3 p2p_server.py
 ```
 
-That's it! The Python script starts the Rust node automatically.
+The Python script starts the Rust node automatically.
 
 ### Client Side (anywhere else)
 
@@ -43,19 +46,19 @@ That's it! The Python script starts the Rust node automatically.
 python3 p2p_client.py
 ```
 
-Then type messages to send to the server!
+Type messages to send to the server!
 
 ## How It Works
 
 ### Rust Side (p2p-node)
 
 Two simple functions:
-- **`send(peer_id, message)`** - Send protobuf message to peer
-- **`listen()`** - Receive messages from peers
+- **`send(peer_id, bytes)`** - Send raw bytes to peer
+- **`listen()`** - Receive raw bytes from peers
 
 Commands via stdin:
 ```
-send <peer_id> <json_message>
+send <peer_id> <json_string>
 list
 ```
 
@@ -65,37 +68,29 @@ list
 ```python
 server = P2PServer()
 await server.start()  # Starts Rust node
-await server.send_message(peer_id, message)
+await server.send_message(peer_id, {"type": "msg", "data": "hello"})
 ```
 
 **Client** (p2p_client.py):
 ```python
 client = P2PClient()
 await client.start()  # Starts Rust node, finds server
-await client.send_message(message)
+await client.send_message({"type": "request", "payload": "hello"})
 ```
 
 ## Message Format
 
-Protobuf schema:
-```protobuf
-message Message {
-  string id = 1;
-  string type = 2;
-  bytes payload = 3;
-  int64 timestamp = 4;
-  map<string, string> metadata = 5;
+Simple JSON for PoC:
+```json
+{
+  "type": "request",
+  "payload": "hello world",
+  "metadata": {"from": "client"},
+  "timestamp": 1234567890.123
 }
 ```
 
-Python usage:
-```python
-msg = Message.create(
-    msg_type="request",
-    payload="hello world",
-    metadata={"key": "value"}
-)
-```
+Python handles all encoding/decoding. Rust just transports bytes.
 
 ## Testing
 
@@ -113,16 +108,18 @@ Message: test message
 
 ## Advantages
 
-1. **Simpler** - No HTTP, just send/receive
-2. **Faster** - Binary protobuf, no HTTP overhead
-3. **Bidirectional** - Server can message clients too
-4. **Cleaner** - Rust handles all P2P, Python just messaging logic
-5. **Type-safe** - Protobuf schema validation
+1. **Transport-Agnostic** - Rust handles P2P, doesn't care about message format
+2. **Simple** - JSON for PoC, easy to switch to protobuf/msgpack later
+3. **Faster** - No serialization overhead in Rust
+4. **Bidirectional** - Server can message clients too
+5. **Cleaner Separation** - Python = app logic, Rust = networking
+6. **No Dependencies** - Python has zero external dependencies
 
 ## Next Steps
 
-- [ ] Add proper protobuf compilation (protoc)
-- [ ] Implement actual stream handling in Rust
+- [ ] Implement actual stream handling in Rust (currently just prints)
 - [ ] Add message acknowledgments
 - [ ] Add broadcast to multiple peers
+- [ ] Switch to protobuf/msgpack for production
 - [ ] Add encryption/authentication
+- [ ] Handle reconnection logic

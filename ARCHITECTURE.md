@@ -1,24 +1,29 @@
-# P2P NAT Traversal - Protobuf Architecture
+# P2P NAT Traversal - Transport-Agnostic Architecture
 
-Complete rewrite with simplified protobuf-based bidirectional messaging.
+Simplified architecture with clean separation of concerns.
 
-## ✨ New Architecture
+## ✨ Architecture Principles
 
-### What Changed
+### Separation of Concerns
 
-**Before**: HTTP-based with separate proxy binaries
-**Now**: Protobuf-based with unified node binary
+**Rust (p2p-node)**: Transport layer only
+- Handles P2P networking (libp2p, DHT, NAT traversal)
+- Works with raw bytes (`Vec<u8>`)
+- Doesn't know about message formats
 
-**Rust Side**:
-- Single binary: `p2p-node`
-- Two modes: `--mode server` or `--mode client`
-- Two functions: `send()` and `listen()`
-- Communication via stdin/stdout with Python
+**Python (p2p_server.py / p2p_client.py)**: Application layer
+- Handles message serialization (JSON for PoC)
+- Can switch to protobuf/msgpack without touching Rust
+- Contains business logic
 
-**Python Side**:
-- `p2p_server.py` - Spawns Rust node, sends/receives messages
-- `p2p_client.py` - Spawns Rust node, sends/receives messages
-- Simple protobuf messages (JSON for demo)
+### Communication Flow
+
+```
+Python App ─(JSON)─> encode ─(bytes)─> stdin ─> Rust ─(P2P)─> Network
+                                                         ^
+                                                         │
+Python App <─(JSON)─ decode <─(bytes)─ stdout <─ Rust <─┘
+```
 
 ## 🚀 Quick Start
 
@@ -37,14 +42,17 @@ Type messages in client to send to server!
 
 ## 📡 API
 
-### Rust Functions
+### Rust Interface (stdin/stdout)
 
-**send(peer_id, message)** - Send protobuf message
+**Input (stdin)**:
 ```bash
-send <peer_id> {"type": "request", "payload": "hello"}
+send <peer_id> <json_string>
+list
 ```
 
-**listen()** - Automatically receives messages (printed to stdout)
+**Output (stdout)**:
+- Status messages (connection events, errors)
+- Received messages (in future: JSON from peers)
 
 ### Python API
 
@@ -52,44 +60,52 @@ send <peer_id> {"type": "request", "payload": "hello"}
 ```python
 server = P2PServer()
 await server.start()
-await server.send_message(peer_id, message)
+await server.send_message(peer_id, {"type": "msg", "data": "hello"})
 ```
 
 **Client**:
 ```python
 client = P2PClient()
 await client.start()
-await client.send_message(message)  # Goes to discovered server
+await client.send_message({"type": "request", "payload": "hello"})
 ```
 
 ## 📦 Message Format
 
-Protobuf schema (proto/message.proto):
-```protobuf
-message Message {
-  string id = 1;
-  string type = 2;
-  bytes payload = 3;
-  int64 timestamp = 4;
-  map<string, string> metadata = 5;
+Simple JSON for PoC:
+```json
+{
+  "type": "request",
+  "payload": "hello world",
+  "metadata": {"from": "python_client"},
+  "timestamp": 1234567890.123
 }
 ```
 
-Python usage:
-```python
-msg = Message.create(
-    msg_type="request",
-    payload="hello world",
-    metadata={"key": "value"}
-)
-```
+Easy to switch to:
+- Protobuf (binary, type-safe)
+- MessagePack (binary, fast)
+- CBOR (binary, self-describing)
+- Any other format
 
 ## 🔧 How It Works
 
-1. **Python starts Rust subprocess**: `cargo run --bin p2p-node`
-2. **Rust handles P2P**: DHT, NAT traversal, connections
-3. **Python sends commands via stdin**: `send <peer> <message>`
-4. **Rust outputs to stdout**: Messages received, status updates
-5. **Bidirectional**: Both sides can send anytime
+1. **Python starts Rust subprocess**: `cargo run --bin p2p-node --mode client`
+2. **Rust handles P2P**: DHT lookup, NAT traversal, connections
+3. **Python sends JSON via stdin**: Encodes dict → JSON → bytes → stdin
+4. **Rust transports bytes**: Sends raw bytes over libp2p
+5. **Rust outputs to stdout**: Received bytes → stdout
+6. **Python decodes**: bytes → JSON → dict
+7. **Bidirectional**: Both sides can send anytime
 
-See [QUICKSTART_V2.md](QUICKSTART_V2.md) for detailed guide.
+## 🎯 Why This Design?
+
+**Before**: Rust knew about protobuf → tight coupling
+**Now**: Rust handles bytes → Python handles serialization
+
+**Benefits**:
+- Switch serialization formats without recompiling Rust
+- Easier testing (send raw bytes)
+- Cleaner code boundaries
+- Python stays simple (no protobuf deps for PoC)
+- Can add multiple Python clients with different formats
