@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-WebSocket Server with BitTorrent DHT Registration
-Registers itself to the DHT so clients can discover it
+WebSocket Server with BitTorrent DHT Registration + TCP Hole Punching
+Uses DHT for peer discovery and TCP hole punching for NAT traversal
 """
 
 import asyncio
 import btdht_rs
 from websockets.server import serve
+import holepunch
 
-SERVICE_KEY = "my-websocket-service"  # This is what clients will search for
+SERVICE_KEY = "my-websocket-service"
 WS_PORT = 8765
 
 
@@ -33,24 +34,34 @@ async def main():
     await dht.start()
     await dht.bootstrap()
 
-    # Register this WebSocket server to the DHT
-    # Note: Use your actual public IP or hostname here
-    # For local testing, you can use localhost
-    ws_url = f"ws://localhost:{WS_PORT}"
+    # Give DHT time to bootstrap
+    print("⏳ Bootstrapping to DHT network...")
+    await asyncio.sleep(2)
 
-    print(f"📢 Registering service '{SERVICE_KEY}' -> {ws_url} to BitTorrent DHT...")
-    hash_str = await dht.register_service(SERVICE_KEY, ws_url, WS_PORT)
+    # Discover network configuration
+    print("🔍 Discovering network configuration...")
+    local_ip = await holepunch.get_local_ip()
+    public_ip = await holepunch.get_public_ip()
+
+    print(f"   Local IP:  {local_ip}:{WS_PORT}")
+    print(f"   Public IP: {public_ip}:{WS_PORT}")
+
+    # Register both endpoints to DHT
+    print(f"\n📢 Registering service '{SERVICE_KEY}' to BitTorrent DHT...")
+    hash_str = await dht.register_service(
+        SERVICE_KEY, local_ip, WS_PORT, public_ip, WS_PORT
+    )
 
     print(f"\n{'=' * 60}")
     print(f"📋 COPY THIS HASH FOR THE CLIENT:")
     print(f"   {hash_str}")
     print(f"{'=' * 60}\n")
 
-    # Start WebSocket server
-    print(f"🚀 WebSocket server started on {ws_url}")
-    print(f"💡 Clients can find this server using service key: '{SERVICE_KEY}'")
+    print(f"🚀 WebSocket server starting on 0.0.0.0:{WS_PORT}")
+    print(f"🔓 Ready for hole-punching connections")
+    print(f"💡 Clients will use TCP hole punching to connect\n")
 
-    async with serve(handler, "0.0.0.0", WS_PORT):
+    async with serve(handler, "0.0.0.0", WS_PORT, reuse_address=True, reuse_port=True):
         # Keep the server running
         await asyncio.Future()
 

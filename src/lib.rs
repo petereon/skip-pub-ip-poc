@@ -13,16 +13,20 @@ pub struct PeerInfo {
     #[pyo3(get)]
     pub peer_id: String,
     #[pyo3(get)]
-    pub ws_url: String,
+    pub local_ip: String,
     #[pyo3(get)]
-    pub port: u16,
+    pub local_port: u16,
+    #[pyo3(get)]
+    pub external_ip: String,
+    #[pyo3(get)]
+    pub external_port: u16,
 }
 
 #[pymethods]
 impl PeerInfo {
     #[new]
-    fn new(peer_id: String, ws_url: String, port: u16) -> Self {
-        Self { peer_id, ws_url, port }
+    fn new(peer_id: String, local_ip: String, local_port: u16, external_ip: String, external_port: u16) -> Self {
+        Self { peer_id, local_ip, local_port, external_ip, external_port }
     }
 }
 
@@ -60,9 +64,15 @@ impl BTDht {
         })
     }
 
-    fn register_service<'py>(&self, py: Python<'py>, service_key: String, ws_url: String, port: u16) -> PyResult<&'py PyAny> {
+    fn register_service<'py>(&self, py: Python<'py>, service_key: String, local_ip: String, local_port: u16, external_ip: String, external_port: u16) -> PyResult<&'py PyAny> {
         let peer_id = format!("py-ws-{}", uuid::Uuid::new_v4());
-        let peer_info = PeerInfo { peer_id: peer_id.clone(), ws_url: ws_url.clone(), port };
+        let peer_info = PeerInfo {
+            peer_id: peer_id.clone(),
+            local_ip: local_ip.clone(),
+            local_port,
+            external_ip: external_ip.clone(),
+            external_port,
+        };
 
         // Store locally
         self.services.lock().unwrap().insert(service_key.clone(), peer_info.clone());
@@ -84,7 +94,9 @@ impl BTDht {
             let actual_hash = result.target();
             let hash_str = format!("{:?}", actual_hash);
 
-            println!("✅ Registered {} -> {} in BitTorrent DHT", service_key_clone, ws_url);
+            println!("✅ Registered {} in BitTorrent DHT", service_key_clone);
+            println!("   Local:    {}:{}", local_ip, local_port);
+            println!("   External: {}:{}", external_ip, external_port);
             println!("   Hash: {}", hash_str);
             println!("   Stored at {} nodes", result.stored_at().len());
             println!("\n   📋 Copy this hash to use in client:");
@@ -114,8 +126,10 @@ impl BTDht {
             // Get first successful response
             for res in &mut response {
                 if let Ok(peer_info) = bincode::deserialize::<PeerInfo>(&res.value) {
-                    println!("✅ Found {} -> {} from DHT node {:?}", service_key, peer_info.ws_url, res.from);
-                    return Ok(Python::with_gil(|py| peer_info.ws_url.into_py(py)));
+                    println!("✅ Found peer from DHT node {:?}", res.from);
+                    println!("   Local:    {}:{}", peer_info.local_ip, peer_info.local_port);
+                    println!("   External: {}:{}", peer_info.external_ip, peer_info.external_port);
+                    return Ok(Python::with_gil(|py| peer_info.into_py(py)));
                 }
             }
 
@@ -154,8 +168,10 @@ impl BTDht {
             // Get first successful response
             for res in &mut response {
                 if let Ok(peer_info) = bincode::deserialize::<PeerInfo>(&res.value) {
-                    println!("✅ Found {} from DHT node {:?}", peer_info.ws_url, res.from);
-                    return Ok(Python::with_gil(|py| peer_info.ws_url.into_py(py)));
+                    println!("✅ Found peer from DHT node {:?}", res.from);
+                    println!("   Local:    {}:{}", peer_info.local_ip, peer_info.local_port);
+                    println!("   External: {}:{}", peer_info.external_ip, peer_info.external_port);
+                    return Ok(Python::with_gil(|py| peer_info.into_py(py)));
                 }
             }
 
@@ -164,10 +180,10 @@ impl BTDht {
         })
     }
 
-    fn list_services(&self) -> Vec<(String, String)> {
+    fn list_services(&self) -> Vec<(String, String, u16)> {
         self.services.lock().unwrap()
             .iter()
-            .map(|(k, v)| (k.clone(), v.ws_url.clone()))
+            .map(|(k, v)| (k.clone(), v.external_ip.clone(), v.external_port))
             .collect()
     }
 }
