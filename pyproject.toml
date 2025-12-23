@@ -1,7 +1,13 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
 [project]
 name = "skip-pub-ip-poc"
 version = "0.1.0"
-description = "P2P NAT traversal proof of concept"
+description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "websockets>=15.0.1",
+]
